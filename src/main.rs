@@ -11,7 +11,6 @@ fn handle_request(mut _stream: TcpStream) {
     let request = lines.next().unwrap().unwrap();
     let request_type = request.split(" ").nth(0).unwrap();
     let request_path = request.split(" ").nth(1).unwrap();
-    println!("{} {}", request_type, request_path);
 
     let mut headers = HashMap::new();
     for line in lines {
@@ -60,7 +59,10 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                handle_request(_stream);
+                // handle_request(_stream);
+                std::thread::spawn(move || {
+                    handle_request(_stream);
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
