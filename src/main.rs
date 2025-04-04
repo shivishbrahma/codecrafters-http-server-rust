@@ -6,6 +6,8 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+use flate2::{write::GzEncoder, Compression};
+
 enum HTTPStatus {
     Ok,
     Created,
@@ -44,11 +46,20 @@ fn build_response(
     response_content: String,
     request_headers: HashMap<String, String>,
 ) -> String {
-    let length = response_content.len();
+    let mut content = response_content.clone();
 
     let response_enc_type = match request_headers.get("accept-encoding") {
         Some(enc_type) => {
             if enc_type.contains("gzip") {
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                println!("{}", content);
+                let _ = encoder.write_all(content.as_bytes());
+                content = encoder
+                    .finish()
+                    .unwrap()
+                    .iter()
+                    .map(|&x| x as char)
+                    .collect::<String>();
                 String::from("\r\nContent-Encoding: gzip")
             } else {
                 String::new()
@@ -60,13 +71,13 @@ fn build_response(
     format!(
         "HTTP/1.1 {}\r\n{}",
         status(request_status),
-        if length > 0 {
+        if content.len() > 0 {
             format!(
                 "Content-Type: {}{}\r\nContent-Length: {}\r\n\r\n{}",
                 content_type(request_content_type),
                 response_enc_type,
-                length,
-                response_content
+                content.len(),
+                content
             )
         } else {
             "\r\n".to_string()
