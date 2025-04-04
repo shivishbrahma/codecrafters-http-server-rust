@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader, Write},
+    env,
+    fs::File,
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
 };
 
@@ -13,6 +15,25 @@ enum HTTPStatus {
 enum HTTPContentType {
     TextPlain,
     // TextHtml,
+    ApplicationOctetStream,
+}
+
+fn status(http_status: HTTPStatus) -> String {
+    match http_status {
+        HTTPStatus::Ok => "200 OK",
+        HTTPStatus::NotFound => "404 Not Found",
+        HTTPStatus::MethodNotAllowed => "405 Method Not Allowed",
+    }
+    .to_string()
+}
+
+fn content_type(http_content_type: HTTPContentType) -> String {
+    match http_content_type {
+        HTTPContentType::TextPlain => "text/plain",
+        // HTTPContentType::TextHtml => "text/html",
+        HTTPContentType::ApplicationOctetStream => "application/octet-stream",
+    }
+    .to_string()
 }
 
 fn build_response(
@@ -21,23 +42,15 @@ fn build_response(
     http_content_type: HTTPContentType,
 ) -> String {
     let length = contents.len();
-    let status = match http_status {
-        HTTPStatus::Ok => "200 OK",
-        HTTPStatus::NotFound => "404 Not Found",
-        HTTPStatus::MethodNotAllowed => "405 Method Not Allowed",
-    };
-    let content_type = match http_content_type {
-        HTTPContentType::TextPlain => "text/plain",
-        // HTTPContentType::TextHtml => "text/html",
-    };
-
     format!(
         "HTTP/1.1 {}\r\n{}",
-        status,
+        status(http_status),
         if length > 0 {
             format!(
                 "Content-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
-                content_type, length, contents
+                content_type(http_content_type),
+                length,
+                contents
             )
         } else {
             "\r\n".to_string()
@@ -45,9 +58,22 @@ fn build_response(
     )
 }
 
+fn read_file(file_path: String) -> Result<String, std::io::Error> {
+    let mut file = File::open(file_path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
 fn handle_request(mut _stream: TcpStream) {
     let buf_reader = BufReader::new(&mut _stream);
     let mut lines = buf_reader.lines();
+
+    let file_dir = if env::args().len() > 2 && env::args().nth(1).unwrap() == "--directory" {
+        env::args().nth(2).unwrap()
+    } else {
+        "/tmp/".to_string()
+    };
 
     let request = lines.next().unwrap().unwrap();
     let request_type = request.split(" ").nth(0).unwrap();
@@ -81,6 +107,23 @@ fn handle_request(mut _stream: TcpStream) {
                 user_agent.to_string(),
                 HTTPContentType::TextPlain,
             )
+        } else if request_path.starts_with("/files") {
+            let file_path = file_dir + request_path.trim_start_matches("/files/");
+            match read_file(file_path) {
+                Ok(contents) => build_response(
+                    HTTPStatus::Ok,
+                    contents,
+                    HTTPContentType::ApplicationOctetStream,
+                ),
+                Err(e) => {
+                    println!("Error: {}", e);
+                    build_response(
+                        HTTPStatus::NotFound,
+                        "".to_string(),
+                        HTTPContentType::TextPlain,
+                    )
+                }
+            }
         } else {
             build_response(
                 HTTPStatus::NotFound,
