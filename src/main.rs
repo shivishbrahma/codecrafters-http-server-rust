@@ -8,6 +8,7 @@ use std::{
 
 enum HTTPStatus {
     Ok,
+    Created,
     NotFound,
     MethodNotAllowed,
 }
@@ -21,6 +22,7 @@ enum HTTPContentType {
 fn status(http_status: HTTPStatus) -> String {
     match http_status {
         HTTPStatus::Ok => "200 OK",
+        HTTPStatus::Created => "201 Created",
         HTTPStatus::NotFound => "404 Not Found",
         HTTPStatus::MethodNotAllowed => "405 Method Not Allowed",
     }
@@ -65,34 +67,59 @@ fn read_file(file_path: String) -> Result<String, std::io::Error> {
     Ok(contents)
 }
 
-fn handle_request(mut _stream: TcpStream) {
-    let buf_reader = BufReader::new(&mut _stream);
-    let mut lines = buf_reader.lines();
+fn write_file(file_path: String, contents: String) -> Result<(), std::io::Error> {
+    let mut file = File::create(file_path)?;
+    let _ = file.write_all(contents.as_bytes());
+    Ok(())
+}
 
+// fn print_type_of<T>(_: &T) {
+//     println!("{}", std::any::type_name::<T>());
+// }
+
+fn handle_request(mut _stream: TcpStream) {
     let file_dir = if env::args().len() > 2 && env::args().nth(1).unwrap() == "--directory" {
         env::args().nth(2).unwrap()
     } else {
         "/tmp/".to_string()
     };
 
-    let request = lines.next().unwrap().unwrap();
-    let request_type = request.split(" ").nth(0).unwrap();
-    let request_path = request.split(" ").nth(1).unwrap();
+    let mut buf_reader = BufReader::new(&mut _stream);
+    let mut request = String::new();
+    buf_reader.read_line(&mut request).unwrap();
 
-    let headers = lines
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .map(|line| {
-            (
-                line.split(": ").nth(0).unwrap().to_string(),
-                line.split(": ").nth(1).unwrap().to_string(),
-            )
-        })
-        .collect::<HashMap<String, String>>();
+    let request_parts: Vec<&str> = request.trim().split(" ").collect();
+    let request_type = request_parts[0].trim().to_lowercase();
+    let request_path = request_parts[1].trim().to_lowercase();
 
-    let response = if request_type == "GET" {
+    let mut headers = HashMap::new();
+    loop {
+        let mut line = String::new();
+        let bytes_read = buf_reader.read_line(&mut line).unwrap();
+        if bytes_read == 0 || line.trim().is_empty() {
+            break;
+        }
+        let parts: Vec<&str> = line.trim().split(": ").collect();
+        if parts.len() == 2 {
+            headers.insert(parts[0].to_lowercase(), parts[1].to_lowercase());
+        }
+    }
+
+    let mut data = String::new();
+    match headers.get("content-length") {
+        Some(content_length) => {
+            if content_length != "0" {
+                let _ = buf_reader.read_line(&mut data).unwrap();
+            }
+        }
+        None => {}
+    }
+
+    println!("{} - {}", request_path, request_type);
+
+    let response = if request_type == "get" {
         if request_path == "/" {
-            build_response(HTTPStatus::Ok, "".to_string(), HTTPContentType::TextPlain)
+            build_response(HTTPStatus::Ok, String::new(), HTTPContentType::TextPlain)
         } else if request_path.starts_with("/echo") {
             let echo_str = request_path.trim_start_matches("/echo/");
             build_response(
@@ -101,7 +128,7 @@ fn handle_request(mut _stream: TcpStream) {
                 HTTPContentType::TextPlain,
             )
         } else if request_path.starts_with("/user-agent") {
-            let user_agent = headers.get("User-Agent").unwrap();
+            let user_agent = headers.get("user-agent").unwrap();
             build_response(
                 HTTPStatus::Ok,
                 user_agent.to_string(),
@@ -119,7 +146,7 @@ fn handle_request(mut _stream: TcpStream) {
                     println!("Error: {}", e);
                     build_response(
                         HTTPStatus::NotFound,
-                        "".to_string(),
+                        String::new(),
                         HTTPContentType::TextPlain,
                     )
                 }
@@ -127,14 +154,41 @@ fn handle_request(mut _stream: TcpStream) {
         } else {
             build_response(
                 HTTPStatus::NotFound,
-                "".to_string(),
+                String::new(),
+                HTTPContentType::TextPlain,
+            )
+        }
+    } else if request_type == "post" {
+        if request_path.starts_with("/files") {
+            let file_path = file_dir + request_path.trim_start_matches("/files/");
+            let _ = buf_reader.read_line(&mut data).unwrap();
+            println!("Data: {}", data);
+            match write_file(file_path, data) {
+                Ok(_) => build_response(
+                    HTTPStatus::Created,
+                    String::new(),
+                    HTTPContentType::ApplicationOctetStream,
+                ),
+                Err(e) => {
+                    println!("Error: {}", e);
+                    build_response(
+                        HTTPStatus::NotFound,
+                        String::new(),
+                        HTTPContentType::TextPlain,
+                    )
+                }
+            }
+        } else {
+            build_response(
+                HTTPStatus::NotFound,
+                String::new(),
                 HTTPContentType::TextPlain,
             )
         }
     } else {
         build_response(
             HTTPStatus::MethodNotAllowed,
-            "".to_string(),
+            String::new(),
             HTTPContentType::TextPlain,
         )
     };
