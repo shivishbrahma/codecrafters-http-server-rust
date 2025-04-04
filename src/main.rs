@@ -53,7 +53,7 @@ fn build_response(
             if enc_type.contains("gzip") {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
                 println!("{}", content);
-                let _ = encoder.write_all(content.as_bytes());
+                let _ = encoder.write_all(content.trim().as_bytes());
                 content = encoder
                     .finish()
                     .unwrap()
