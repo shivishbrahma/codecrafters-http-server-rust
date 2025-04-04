@@ -73,10 +73,6 @@ fn write_file(file_path: String, contents: String) -> Result<(), std::io::Error>
     Ok(())
 }
 
-// fn print_type_of<T>(_: &T) {
-//     println!("{}", std::any::type_name::<T>());
-// }
-
 fn handle_request(mut _stream: TcpStream) {
     let file_dir = if env::args().len() > 2 && env::args().nth(1).unwrap() == "--directory" {
         env::args().nth(2).unwrap()
@@ -89,8 +85,8 @@ fn handle_request(mut _stream: TcpStream) {
     buf_reader.read_line(&mut request).unwrap();
 
     let request_parts: Vec<&str> = request.trim().split(" ").collect();
-    let request_type = request_parts[0].trim().to_lowercase();
-    let request_path = request_parts[1].trim().to_lowercase();
+    let http_request_type = request_parts[0].trim().to_lowercase();
+    let http_request_path = request_parts[1].trim().to_lowercase();
 
     let mut headers = HashMap::new();
     loop {
@@ -105,37 +101,42 @@ fn handle_request(mut _stream: TcpStream) {
         }
     }
 
-    let mut data = String::new();
+    let mut http_request_body = String::new();
     match headers.get("content-length") {
-        Some(content_length) => {
-            if content_length != "0" {
-                let _ = buf_reader.read_line(&mut data).unwrap();
+        Some(content_length_str) => {
+            if content_length_str != "0" {
+                let content_length = content_length_str.parse::<usize>().unwrap();
+                let mut buf = vec![0; content_length];
+                let bytes_read = buf_reader.read(&mut buf).unwrap();
+                if bytes_read != content_length {
+                    println!("Error: Client sent fewer bytes than specified in Content-Length");
+                    return; // Close the connection
+                }
+                http_request_body = buf.iter().map(|&x| x as char).collect::<String>();
             }
         }
         None => {}
     }
 
-    println!("{} - {}", request_path, request_type);
-
-    let response = if request_type == "get" {
-        if request_path == "/" {
+    let response = if http_request_type == "get" {
+        if http_request_path == "/" {
             build_response(HTTPStatus::Ok, String::new(), HTTPContentType::TextPlain)
-        } else if request_path.starts_with("/echo") {
-            let echo_str = request_path.trim_start_matches("/echo/");
+        } else if http_request_path.starts_with("/echo") {
+            let echo_str = http_request_path.trim_start_matches("/echo/");
             build_response(
                 HTTPStatus::Ok,
                 echo_str.to_string(),
                 HTTPContentType::TextPlain,
             )
-        } else if request_path.starts_with("/user-agent") {
+        } else if http_request_path.starts_with("/user-agent") {
             let user_agent = headers.get("user-agent").unwrap();
             build_response(
                 HTTPStatus::Ok,
                 user_agent.to_string(),
                 HTTPContentType::TextPlain,
             )
-        } else if request_path.starts_with("/files") {
-            let file_path = file_dir + request_path.trim_start_matches("/files/");
+        } else if http_request_path.starts_with("/files") {
+            let file_path = file_dir + http_request_path.trim_start_matches("/files/");
             match read_file(file_path) {
                 Ok(contents) => build_response(
                     HTTPStatus::Ok,
@@ -158,12 +159,10 @@ fn handle_request(mut _stream: TcpStream) {
                 HTTPContentType::TextPlain,
             )
         }
-    } else if request_type == "post" {
-        if request_path.starts_with("/files") {
-            let file_path = file_dir + request_path.trim_start_matches("/files/");
-            let _ = buf_reader.read_line(&mut data).unwrap();
-            println!("Data: {}", data);
-            match write_file(file_path, data) {
+    } else if http_request_type == "post" {
+        if http_request_path.starts_with("/files") {
+            let file_path = file_dir + http_request_path.trim_start_matches("/files/");
+            match write_file(file_path, http_request_body) {
                 Ok(_) => build_response(
                     HTTPStatus::Created,
                     String::new(),
@@ -205,7 +204,7 @@ fn main() {
                 std::thread::spawn(move || handle_request(_stream));
             }
             Err(e) => {
-                println!("error: {}", e);
+                println!("Error: {}", e);
             }
         }
     }
