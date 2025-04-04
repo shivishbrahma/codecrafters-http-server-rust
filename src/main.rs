@@ -39,20 +39,34 @@ fn content_type(http_content_type: HTTPContentType) -> String {
 }
 
 fn build_response(
-    http_status: HTTPStatus,
-    contents: String,
-    http_content_type: HTTPContentType,
+    request_status: HTTPStatus,
+    request_content_type: HTTPContentType,
+    response_content: String,
+    request_headers: HashMap<String, String>,
 ) -> String {
-    let length = contents.len();
+    let length = response_content.len();
+
+    let response_enc_type = match request_headers.get("accept-encoding") {
+        Some(enc_type) => {
+            if enc_type.contains("gzip") {
+                String::from("\r\nContent-Encoding: gzip")
+            } else {
+                String::new()
+            }
+        }
+        None => String::new(),
+    };
+
     format!(
         "HTTP/1.1 {}\r\n{}",
-        status(http_status),
+        status(request_status),
         if length > 0 {
             format!(
-                "Content-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
-                content_type(http_content_type),
+                "Content-Type: {}{}\r\nContent-Length: {}\r\n\r\n{}",
+                content_type(request_content_type),
+                response_enc_type,
                 length,
-                contents
+                response_content
             )
         } else {
             "\r\n".to_string()
@@ -109,7 +123,7 @@ fn handle_request(mut _stream: TcpStream) {
                 let mut buf = vec![0; content_length];
                 let bytes_read = buf_reader.read(&mut buf).unwrap();
                 if bytes_read != content_length {
-                    println!("Error: Client sent fewer bytes than specified in Content-Length");
+                    eprintln!("Error: Client sent fewer bytes than specified in Content-Length");
                     return; // Close the connection
                 }
                 http_request_body = buf.iter().map(|&x| x as char).collect::<String>();
@@ -120,43 +134,53 @@ fn handle_request(mut _stream: TcpStream) {
 
     let response = if http_request_type == "get" {
         if http_request_path == "/" {
-            build_response(HTTPStatus::Ok, String::new(), HTTPContentType::TextPlain)
+            build_response(
+                HTTPStatus::Ok,
+                HTTPContentType::TextPlain,
+                String::new(),
+                headers,
+            )
         } else if http_request_path.starts_with("/echo") {
             let echo_str = http_request_path.trim_start_matches("/echo/");
             build_response(
                 HTTPStatus::Ok,
-                echo_str.to_string(),
                 HTTPContentType::TextPlain,
+                echo_str.to_string(),
+                headers,
             )
         } else if http_request_path.starts_with("/user-agent") {
             let user_agent = headers.get("user-agent").unwrap();
             build_response(
                 HTTPStatus::Ok,
-                user_agent.to_string(),
                 HTTPContentType::TextPlain,
+                user_agent.to_string(),
+                headers,
             )
         } else if http_request_path.starts_with("/files") {
             let file_path = file_dir + http_request_path.trim_start_matches("/files/");
             match read_file(file_path) {
                 Ok(contents) => build_response(
                     HTTPStatus::Ok,
-                    contents,
                     HTTPContentType::ApplicationOctetStream,
+                    contents,
+                    headers,
                 ),
                 Err(e) => {
-                    println!("Error: {}", e);
+                    eprintln!("Error: {}", e);
                     build_response(
                         HTTPStatus::NotFound,
-                        String::new(),
                         HTTPContentType::TextPlain,
+                        String::new(),
+                        headers,
                     )
                 }
             }
         } else {
             build_response(
                 HTTPStatus::NotFound,
-                String::new(),
                 HTTPContentType::TextPlain,
+                String::new(),
+                headers,
             )
         }
     } else if http_request_type == "post" {
@@ -165,30 +189,34 @@ fn handle_request(mut _stream: TcpStream) {
             match write_file(file_path, http_request_body) {
                 Ok(_) => build_response(
                     HTTPStatus::Created,
-                    String::new(),
                     HTTPContentType::ApplicationOctetStream,
+                    String::new(),
+                    headers,
                 ),
                 Err(e) => {
-                    println!("Error: {}", e);
+                    eprintln!("Error: {}", e);
                     build_response(
                         HTTPStatus::NotFound,
-                        String::new(),
                         HTTPContentType::TextPlain,
+                        String::new(),
+                        headers,
                     )
                 }
             }
         } else {
             build_response(
                 HTTPStatus::NotFound,
-                String::new(),
                 HTTPContentType::TextPlain,
+                String::new(),
+                headers,
             )
         }
     } else {
         build_response(
             HTTPStatus::MethodNotAllowed,
-            String::new(),
             HTTPContentType::TextPlain,
+            String::new(),
+            headers,
         )
     };
     _stream.write_all(response.as_bytes()).unwrap();
@@ -204,7 +232,7 @@ fn main() {
                 std::thread::spawn(move || handle_request(_stream));
             }
             Err(e) => {
-                println!("Error: {}", e);
+                eprintln!("Error: {}", e);
             }
         }
     }
