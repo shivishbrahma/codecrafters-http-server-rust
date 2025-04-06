@@ -45,44 +45,46 @@ fn build_response(
     request_content_type: HTTPContentType,
     response_content: String,
     request_headers: HashMap<String, String>,
-) -> String {
-    let mut content = response_content.clone();
+) -> Vec<u8> {
+    let mut response: Vec<u8> = vec![];
 
+    response.extend_from_slice(format!("HTTP/1.1 {}\r\n", status(request_status)).as_bytes());
+
+    let content: Vec<u8>;
     let response_enc_type = match request_headers.get("accept-encoding") {
         Some(enc_type) => {
             if enc_type.contains("gzip") {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                println!("{}", content);
-                let _ = encoder.write_all(content.trim().as_bytes());
-                content = encoder
-                    .finish()
-                    .unwrap()
-                    .iter()
-                    .map(|&x| x as char)
-                    .collect::<String>();
+                let _ = encoder.write_all(response_content.trim().as_bytes());
+                content = encoder.finish().unwrap();
                 String::from("\r\nContent-Encoding: gzip")
             } else {
+                content = response_content.trim().as_bytes().to_vec();
                 String::new()
             }
         }
-        None => String::new(),
+        None => {
+            content = response_content.trim().as_bytes().to_vec();
+            String::new()
+        }
     };
 
-    format!(
-        "HTTP/1.1 {}\r\n{}",
-        status(request_status),
-        if content.len() > 0 {
+    if content.len() > 0 {
+        response.extend_from_slice(
             format!(
-                "Content-Type: {}{}\r\nContent-Length: {}\r\n\r\n{}",
+                "Content-Type: {}{}\r\nContent-Length: {}\r\n\r\n",
                 content_type(request_content_type),
                 response_enc_type,
                 content.len(),
-                content
             )
-        } else {
-            "\r\n".to_string()
-        }
-    )
+            .as_bytes(),
+        );
+        response.extend_from_slice(&content);
+    } else {
+        response.extend_from_slice("\r\n".as_bytes());
+    }
+
+    response
 }
 
 fn read_file(file_path: String) -> Result<String, std::io::Error> {
@@ -143,7 +145,7 @@ fn handle_request(mut _stream: TcpStream) {
         None => {}
     }
 
-    let response = if http_request_type == "get" {
+    let response: Vec<u8> = if http_request_type == "get" {
         if http_request_path == "/" {
             build_response(
                 HTTPStatus::Ok,
@@ -170,12 +172,15 @@ fn handle_request(mut _stream: TcpStream) {
         } else if http_request_path.starts_with("/files") {
             let file_path = file_dir + http_request_path.trim_start_matches("/files/");
             match read_file(file_path) {
-                Ok(contents) => build_response(
-                    HTTPStatus::Ok,
-                    HTTPContentType::ApplicationOctetStream,
-                    contents,
-                    headers,
-                ),
+                Ok(contents) => {
+                    println!("File contents: {}", contents);
+                    build_response(
+                        HTTPStatus::Ok,
+                        HTTPContentType::ApplicationOctetStream,
+                        contents,
+                        headers,
+                    )
+                }
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     build_response(
@@ -230,7 +235,7 @@ fn handle_request(mut _stream: TcpStream) {
             headers,
         )
     };
-    _stream.write_all(response.as_bytes()).unwrap();
+    _stream.write_all(&response).unwrap();
 }
 
 fn main() {
