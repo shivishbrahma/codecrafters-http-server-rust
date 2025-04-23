@@ -3,7 +3,7 @@ use std::{
     env,
     fs::File,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
 };
 
 use flate2::{write::GzEncoder, Compression};
@@ -100,14 +100,14 @@ fn write_file(file_path: String, contents: String) -> Result<(), std::io::Error>
     Ok(())
 }
 
-fn handle_request(mut _stream: TcpStream) {
+fn handle_request(mut request: &[u8]) -> Vec<u8> {
     let file_dir = if env::args().len() > 2 && env::args().nth(1).unwrap() == "--directory" {
         env::args().nth(2).unwrap()
     } else {
         "/tmp/".to_string()
     };
 
-    let mut buf_reader = BufReader::new(&mut _stream);
+    let mut buf_reader = BufReader::new(&mut request);
     let mut request = String::new();
     buf_reader.read_line(&mut request).unwrap();
 
@@ -137,7 +137,7 @@ fn handle_request(mut _stream: TcpStream) {
                 let bytes_read = buf_reader.read(&mut buf).unwrap();
                 if bytes_read != content_length {
                     eprintln!("Error: Client sent fewer bytes than specified in Content-Length");
-                    return; // Close the connection
+                    return vec![]; // Close the connection
                 }
                 http_request_body = buf.iter().map(|&x| x as char).collect::<String>();
             }
@@ -145,7 +145,7 @@ fn handle_request(mut _stream: TcpStream) {
         None => {}
     }
 
-    let response: Vec<u8> = if http_request_type == "get" {
+    if http_request_type == "get" {
         if http_request_path == "/" {
             build_response(
                 HTTPStatus::Ok,
@@ -234,8 +234,7 @@ fn handle_request(mut _stream: TcpStream) {
             String::new(),
             headers,
         )
-    };
-    _stream.write_all(&response).unwrap();
+    }
 }
 
 fn main() {
@@ -245,7 +244,17 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 // handle_request(_stream);
-                std::thread::spawn(move || handle_request(_stream));
+                std::thread::spawn(move || {
+                    let mut buf = vec![0; 1024];
+                    while let Ok(bytes_read) = _stream.read(&mut buf) {
+                        if bytes_read == 0 {
+                            break;
+                        }
+                        let request = &buf[..bytes_read];
+                        let response = handle_request(request);
+                        _stream.write_all(&response).unwrap();
+                    } // let bytes_read = _stream.read(&mut buf);
+                });
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
